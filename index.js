@@ -10,7 +10,8 @@ dotenv.config();
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ]
 });
 const channelId = process.env.CHANNEL_ID;
@@ -46,15 +47,15 @@ async function fetchCalendarHTML(date, countryCode) {
   return json.data.content; // HTML-Fragment
 }
 
-// Parst das HTML-Fragment und gibt eine Text-Liste der Einträge zurück
+// Parser für alle Einträge
 function parseCalendar(html) {
   const $ = load(html);
   const rows = [];
   $('#economicCalendarData tbody tr').each((_, el) => {
-    const time = $(el).find('td').eq(0).text().trim();
+    const time     = $(el).find('td').eq(0).text().trim();
     const currency = $(el).find('td').eq(1).text().trim();
-    const event = $(el).find('td').eq(2).text().trim();
-    const actual = $(el).find('td').eq(3).text().trim();
+    const event    = $(el).find('td').eq(2).text().trim();
+    const actual   = $(el).find('td').eq(3).text().trim();
     const forecast = $(el).find('td').eq(4).text().trim();
     const previous = $(el).find('td').eq(5).text().trim();
     rows.push(
@@ -65,14 +66,31 @@ function parseCalendar(html) {
   return rows.length ? rows.join('\n\n') : 'Keine Einträge gefunden.';
 }
 
+// Parser, der nur Actual-Werte zurückgibt
+function parseActualOnly(html) {
+  const $ = load(html);
+  const rows = [];
+  $('#economicCalendarData tbody tr').each((_, el) => {
+    const actual = $(el).find('td').eq(3).text().trim();
+    if (actual) {
+      const time     = $(el).find('td').eq(0).text().trim();
+      const currency = $(el).find('td').eq(1).text().trim();
+      const event    = $(el).find('td').eq(2).text().trim();
+      rows.push(`\`${time}\` • **${currency}** — ${event}: ${actual}`);
+    }
+  });
+  return rows.length ? rows.join('\n\n') : 'Keine aktuellen Daten.';
+}
+
 client.once('ready', () => {
+  console.log('Bot ist online!');
   const channel = client.channels.cache.get(channelId);
   if (!channel?.isTextBased()) {
     console.error('Channel nicht gefunden oder kein Text-Channel!');
     process.exit(1);
   }
 
-  // Cronjob: 00:00 Uhr Tages-Übersicht
+  // 00:00 Uhr: Tages-Übersicht
   cron.schedule('0 0 * * *', async () => {
     try {
       const today = new Date().toISOString().slice(0, 10);
@@ -90,43 +108,44 @@ client.once('ready', () => {
     }
   }, { timezone: tz });
 
-  // Cronjob: 08:00 Uhr nur Actual-Werte
+  // 08:00 Uhr: Nur Actual-Werte
   cron.schedule('0 8 * * *', async () => {
     try {
       const today = new Date().toISOString().slice(0, 10);
       const deHtml = await fetchCalendarHTML(today, 'germany');
       const usHtml = await fetchCalendarHTML(today, 'united_states');
-
-      // Nur Zeilen mit “Actual” filtern
-      const filterActual = html => {
-        const $ = load(html);
-        const rows = [];
-        $('#economicCalendarData tbody tr').each((_, el) => {
-          const actual = $(el).find('td').eq(3).text().trim();
-          if (actual) {
-            const time = $(el).find('td').eq(0).text().trim();
-            const currency = $(el).find('td').eq(1).text().trim();
-            const event = $(el).find('td').eq(2).text().trim();
-            rows.push(`\`${time}\` • **${currency}** — ${event}: ${actual}`);
-          }
-        });
-        return rows.length ? rows.join('\n\n') : 'Keine aktuellen Daten.';
-      };
-
-      const deActual = filterActual(deHtml);
-      const usActual = filterActual(usHtml);
-
+      const deText = parseActualOnly(deHtml);
+      const usText = parseActualOnly(usHtml);
       await channel.send(
         `⏱ **Aktuelle Wirtschafts-Daten ${today}**\n\n` +
-        `🇩🇪 Deutschland:\n${deActual}\n\n` +
-        `🇺🇸 USA:\n${usActual}`
+        `🇩🇪 Deutschland:\n${deText}\n\n` +
+        `🇺🇸 USA:\n${usText}`
       );
     } catch (err) {
       console.error('Fehler bei 08:00-Job:', err);
     }
   }, { timezone: tz });
 
-  console.log('Bot ist online!');
+  // Test-Command: Schreibe "!test" im Channel, um eine Sofort-Abfrage zu starten
+  client.on('messageCreate', async message => {
+    if (message.channelId === channelId && message.content === '!test') {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const deHtml = await fetchCalendarHTML(today, 'germany');
+        const usHtml = await fetchCalendarHTML(today, 'united_states');
+        const deText = parseCalendar(deHtml);
+        const usText = parseCalendar(usHtml);
+        await message.reply(
+          `📊 **Test: Wirtschaftskalender ${today}**\n\n` +
+          `🇩🇪 **Deutschland**:\n${deText}\n\n` +
+          `🇺🇸 **USA**:\n${usText}`
+        );
+      } catch (err) {
+        console.error('Fehler bei Test-Command:', err);
+        await message.reply('Fehler beim Abrufen der Daten. Schau in die Logs!');
+      }
+    }
+  });
 });
 
 client.login(process.env.DISCORD_TOKEN);
