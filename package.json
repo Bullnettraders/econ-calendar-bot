@@ -1,12 +1,14 @@
 {
   "name": "econ-calendar-bot",
   "version": "1.0.0",
-  "description": "Discord-Bot für tägliche Wirtschaftsdaten (DE & US) von Investing.com",
+  "type": "module",           // <-- hier hinzufügen
+  "description": "Discord-Bot für tägliche Wirtschaftsdaten",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
     "discord.js": "^14.0.0",
     "dotenv": "^16.0.0",
     "node-cron": "^3.0.0",
