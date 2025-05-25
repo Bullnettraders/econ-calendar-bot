@@ -2,7 +2,7 @@
 import { Client, GatewayIntentBits } from 'discord.js';
 import cron from 'node-cron';
 import fetch from 'node-fetch';
-import cheerio from 'cheerio';
+import { load } from 'cheerio';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -48,18 +48,21 @@ async function fetchCalendarHTML(date, countryCode) {
 
 // Parst das HTML-Fragment und gibt eine Text-Liste der Einträge zurück
 function parseCalendar(html) {
-  const $ = cheerio.load(html);
+  const $ = load(html);
   const rows = [];
   $('#economicCalendarData tbody tr').each((_, el) => {
-    const time = $(el).find('.first left time').text().trim() || $(el).find('td').eq(0).text().trim();
+    const time = $(el).find('td').eq(0).text().trim();
     const currency = $(el).find('td').eq(1).text().trim();
     const event = $(el).find('td').eq(2).text().trim();
     const actual = $(el).find('td').eq(3).text().trim();
     const forecast = $(el).find('td').eq(4).text().trim();
     const previous = $(el).find('td').eq(5).text().trim();
-    rows.push(`\`${time}\` • **${currency}** — ${event}\n> Actual: ${actual} | Forecast: ${forecast} | Previous: ${previous}`);
+    rows.push(
+      `\`${time}\` • **${currency}** — ${event}\n` +
+      `> Actual: ${actual} | Forecast: ${forecast} | Previous: ${previous}`
+    );
   });
-  return rows.length ? rows.join('\n') : 'Keine Einträge gefunden.';
+  return rows.length ? rows.join('\n\n') : 'Keine Einträge gefunden.';
 }
 
 client.once('ready', () => {
@@ -78,7 +81,9 @@ client.once('ready', () => {
       const deText = parseCalendar(deHtml);
       const usText = parseCalendar(usHtml);
       await channel.send(
-        `📊 **Wirtschaftskalender ${today}**\n\n🇩🇪 **Deutschland**:\n${deText}\n\n🇺🇸 **USA**:\n${usText}`
+        `📊 **Wirtschaftskalender ${today}**\n\n` +
+        `🇩🇪 **Deutschland**:\n${deText}\n\n` +
+        `🇺🇸 **USA**:\n${usText}`
       );
     } catch (err) {
       console.error('Fehler bei 00:00-Job:', err);
@@ -94,7 +99,7 @@ client.once('ready', () => {
 
       // Nur Zeilen mit “Actual” filtern
       const filterActual = html => {
-        const $ = cheerio.load(html);
+        const $ = load(html);
         const rows = [];
         $('#economicCalendarData tbody tr').each((_, el) => {
           const actual = $(el).find('td').eq(3).text().trim();
@@ -105,14 +110,16 @@ client.once('ready', () => {
             rows.push(`\`${time}\` • **${currency}** — ${event}: ${actual}`);
           }
         });
-        return rows.length ? rows.join('\n') : 'Keine aktuellen Daten.';
+        return rows.length ? rows.join('\n\n') : 'Keine aktuellen Daten.';
       };
 
       const deActual = filterActual(deHtml);
       const usActual = filterActual(usHtml);
 
       await channel.send(
-        `⏱ **Aktuelle Wirtschafts-Daten ${today}**\n\n🇩🇪 Deutschland:\n${deActual}\n\n🇺🇸 USA:\n${usActual}`
+        `⏱ **Aktuelle Wirtschafts-Daten ${today}**\n\n` +
+        `🇩🇪 Deutschland:\n${deActual}\n\n` +
+        `🇺🇸 USA:\n${usActual}`
       );
     } catch (err) {
       console.error('Fehler bei 08:00-Job:', err);
