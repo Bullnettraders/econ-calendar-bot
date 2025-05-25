@@ -1,6 +1,7 @@
 FROM node:18-alpine
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production
+COPY package.json ./
+# statt `RUN npm ci --only=production`
+RUN npm install --only=production
 COPY . .
-CMD ["npm", "start"]
+CMD ["node", "index.js"]
