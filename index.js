@@ -17,38 +17,23 @@ const client = new Client({
 const channelId = process.env.CHANNEL_ID;
 const tz = process.env.TZ || 'Europe/Berlin';
 
-// 1) Vollen Kalender abrufen (ohne country-Filter)
-async function fetchCalendarHTML(date) {
-  const url = 'https://www.investing.com/economic-calendar/Service/getCalendarFilteredData';
-  const params = new URLSearchParams({
-    dateFrom: date,
-    dateTo: date,
-    timeFilter: 'all',
-    timezoneId: '93'     // Berlin
-  });
-
-  const res = await fetch(url, {
-    method: 'POST',
+// 1) Seite per GET holen
+async function fetchCalendarHTML() {
+  const res = await fetch('https://www.investing.com/economic-calendar/', {
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'x-requested-with': 'XMLHttpRequest',
-      'Referer': 'https://www.investing.com/economic-calendar/',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-    },
-    body: params
+    }
   });
-
-  if (!res.ok) {
-    throw new Error(`Investing API Error: ${res.status}`);
-  }
-  const json = await res.json();
-  return json.data.content;
+  if (!res.ok) throw new Error(`Fetch Error: ${res.status}`);
+  const html = await res.text();
+  return html;
 }
 
-// 2) Komplettes HTML in ein Objekt-Array parsen
+// 2) Tabelle parsen wie vorher
 function parseAll(html) {
   const $ = load(html);
   const items = [];
+  // Die Seite zeigt immer die heutige Tabelle, im tbody sind die Rows
   $('#economicCalendarData tbody tr').each((_, el) => {
     const time     = $(el).find('td').eq(0).text().trim();
     const currency = $(el).find('td').eq(1).text().trim();
@@ -61,94 +46,80 @@ function parseAll(html) {
   return items;
 }
 
-// 3) Objekt-Array zu Markdown-Text umwandeln
 function formatRows(rows) {
   if (!rows.length) return 'Keine Einträge gefunden.';
-  return rows
-    .map(r =>
-      `\`${r.time}\` • **${r.currency}** — ${r.event}\n` +
-      `> Actual: ${r.actual} | Forecast: ${r.forecast} | Previous: ${r.previous}`
-    )
-    .join('\n\n');
+  return rows.map(r =>
+    `\`${r.time}\` • **${r.currency}** — ${r.event}\n` +
+    `> Actual: ${r.actual} | Forecast: ${r.forecast} | Previous: ${r.previous}`
+  ).join('\n\n');
 }
 
-// 4) Nur Actual-Werte formatieren
 function formatActual(rows) {
   const filtered = rows.filter(r => r.actual);
   if (!filtered.length) return 'Keine aktuellen Daten.';
-  return filtered
-    .map(r =>
-      `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual}`
-    )
-    .join('\n\n');
+  return filtered.map(r =>
+    `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual}`
+  ).join('\n\n');
 }
 
 client.once('ready', () => {
   console.log('Bot ist online!');
   const channel = client.channels.cache.get(channelId);
   if (!channel?.isTextBased()) {
-    console.error('Channel nicht gefunden oder kein Text-Channel!');
+    console.error('Channel nicht gefunden!');
     process.exit(1);
   }
 
-  // Cronjob 00:00 Uhr: komplette Übersicht
+  // 00:00 Tages-Übersicht
   cron.schedule('0 0 * * *', async () => {
     try {
-      const today   = new Date().toISOString().slice(0, 10);
-      const html    = await fetchCalendarHTML(today);
-      const allRows = parseAll(html);
-
-      // splitten nach Währung (EUR = DE, USD = US)
-      const deRows = allRows.filter(r => r.currency === 'EUR');
-      const usRows = allRows.filter(r => r.currency === 'USD');
-
+      const html = await fetchCalendarHTML();
+      const all  = parseAll(html);
+      const de   = all.filter(r => r.currency === 'EUR');
+      const us   = all.filter(r => r.currency === 'USD');
       await channel.send(
-        `📊 **Wirtschaftskalender ${today}**\n\n` +
-        `🇩🇪 **Deutschland (EUR)**\n${formatRows(deRows)}\n\n` +
-        `🇺🇸 **USA (USD)**\n${formatRows(usRows)}`
+        `📊 **Wirtschaftskalender ${new Date().toISOString().slice(0,10)}**\n\n` +
+        `🇩🇪 Deutschland (EUR)\n${formatRows(de)}\n\n` +
+        `🇺🇸 USA (USD)\n${formatRows(us)}`
       );
-    } catch (err) {
-      console.error('Fehler bei 00:00-Job:', err);
+    } catch (e) {
+      console.error('00:00-Job Fehler:', e);
     }
   }, { timezone: tz });
 
-  // Cronjob 08:00 Uhr: nur Actual
+  // 08:00 nur Actual
   cron.schedule('0 8 * * *', async () => {
     try {
-      const today   = new Date().toISOString().slice(0, 10);
-      const html    = await fetchCalendarHTML(today);
-      const allRows = parseAll(html);
-
-      const deRows = allRows.filter(r => r.currency === 'EUR');
-      const usRows = allRows.filter(r => r.currency === 'USD');
-
+      const html = await fetchCalendarHTML();
+      const all  = parseAll(html);
+      const de   = all.filter(r => r.currency === 'EUR');
+      const us   = all.filter(r => r.currency === 'USD');
       await channel.send(
-        `⏱ **Aktuelle Wirtschafts-Daten ${today}**\n\n` +
-        `🇩🇪 Deutschland (EUR)\n${formatActual(deRows)}\n\n` +
-        `🇺🇸 USA (USD)\n${formatActual(usRows)}`
+        `⏱ **Aktuelle Wirtschafts-Daten ${new Date().toISOString().slice(0,10)}**\n\n` +
+        `🇩🇪 Deutschland (EUR)\n${formatActual(de)}\n\n` +
+        `🇺🇸 USA (USD)\n${formatActual(us)}`
       );
-    } catch (err) {
-      console.error('Fehler bei 08:00-Job:', err);
+    } catch (e) {
+      console.error('08:00-Job Fehler:', e);
     }
   }, { timezone: tz });
 
-  // Test-Command: "!test" im Channel
-  client.on('messageCreate', async message => {
-    if (message.channelId === channelId && message.content === '!test') {
+  // Test-Command
+  client.on('messageCreate', async msg => {
+    if (msg.channelId === channelId && msg.content === '!test') {
       try {
-        const today   = new Date().toISOString().slice(0, 10);
-        const html    = await fetchCalendarHTML(today);
-        const allRows = parseAll(html);
-        const deRows  = allRows.filter(r => r.currency === 'EUR');
-        const usRows  = allRows.filter(r => r.currency === 'USD');
-        await message.reply(
-          `📊 **Test: Wirtschaftskalender ${today}**\n\n` +
-          `🇩🇪 Deutschland (EUR)\n${formatRows(deRows)}\n\n` +
-          `🇺🇸 USA (USD)\n${formatRows(usRows)}`
+        const html = await fetchCalendarHTML();
+        const all  = parseAll(html);
+        const de   = all.filter(r => r.currency === 'EUR');
+        const us   = all.filter(r => r.currency === 'USD');
+        await msg.reply(
+          `📊 **Test: Wirtschaftskalender**\n\n` +
+          `🇩🇪 Deutschland\n${formatRows(de)}\n\n` +
+          `🇺🇸 USA\n${formatRows(us)}`
         );
-      } catch (err) {
-        console.error('Fehler bei Test-Command:', err);
-        await message.reply('Fehler beim Abrufen der Daten. Sieh in die Logs!');
+      } catch (e) {
+        console.error('Test-Command Fehler:', e);
+        await msg.reply('Fehler beim Testen – siehe Logs.');
       }
     }
   });
