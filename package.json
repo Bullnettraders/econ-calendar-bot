@@ -1,7 +1,7 @@
 {
   "name": "econ-calendar-bot",
   "version": "1.0.0",
-  "type": "module",           // <-- hier hinzufügen
+  "type": "module",
   "description": "Discord-Bot für tägliche Wirtschaftsdaten",
   "main": "index.js",
   "scripts": {
