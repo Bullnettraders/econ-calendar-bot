@@ -87,16 +87,10 @@ client.once('ready', () => {
   // 00:00 Uhr: komplette Tages-Übersicht + Cache-Reset + Old-Posts löschen
   cron.schedule('0 0 * * *', async () => {
     try {
-      // Alte Bot-Beiträge löschen
       await clearBotMessages(channel);
-
       const html = await fetchCalendarHTML();
       const all  = parseAll(html);
-
-      // Cache leeren
       for (const key in lastActual) delete lastActual[key];
-
-      // Übersicht senden
       const date = new Date().toISOString().slice(0,10);
       const deRows = all.filter(r => r.currency === 'EUR');
       const usRows = all.filter(r => r.currency === 'USD');
@@ -105,8 +99,6 @@ client.once('ready', () => {
         `🇩🇪 Deutschland (EUR)\n${formatRows(deRows)}\n\n` +
         `🇺🇸 USA (USD)\n${formatRows(usRows)}`
       );
-
-      // Cache mit aktuellen Zahlen befüllen
       all.forEach(r => {
         const a = parseFloat(r.actual.replace(/[,%]/g, ''));
         if (!isNaN(a)) {
@@ -114,50 +106,42 @@ client.once('ready', () => {
           lastActual[key] = a;
         }
       });
-
     } catch (e) {
       console.error('00:00-Job Fehler:', e);
     }
   }, { timezone: tz });
 
-  // Polling: jede Minute von 08:00–22:00, nur echte neue Zahlen
+  // Polling: jede Minute von 08:00–22:00, nur neue Zahlen
   cron.schedule('*/1 8-22 * * *', async () => {
     try {
-      const html       = await fetchCalendarHTML();
-      const all        = parseAll(html);
+      const html = await fetchCalendarHTML();
+      const all  = parseAll(html);
       const newEntries = [];
-
       for (const r of all) {
         const a = parseFloat(r.actual.replace(/[,%]/g, ''));
         if (isNaN(a)) continue;
-
         const key = `${r.currency}|${r.event}|${r.time}`;
         if (lastActual[key] !== a) {
-          const comp = compareWithForecast(r.actual, r.forecast);
           newEntries.push(
-            `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual} ${comp}`
+            `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
           );
           lastActual[key] = a;
         }
       }
-
       if (newEntries.length > 0) {
-        const now = new Date().toLocaleTimeString('de-DE', {
-          hour: '2-digit', minute: '2-digit', timeZone: tz
-        });
-        await channel.send(
-          `🕑 **Neue Wirtschafts-Daten (${now})**\n` +
-          newEntries.join('\n')
-        );
+        const now = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+        await channel.send(`🕑 **Neue Wirtschafts-Daten (${now})**\n${newEntries.join('\n')}`);
       }
     } catch (e) {
       console.error('Polling-Job Fehler:', e);
     }
   }, { timezone: tz });
 
-  // Test-Command: "!test"
   client.on('messageCreate', async msg => {
-    if (msg.channelId === channelId && msg.content === '!test') {
+    if (msg.channelId !== channelId) return;
+
+    // Test-Command: Tagesübersicht
+    if (msg.content === '!test') {
       try {
         const html   = await fetchCalendarHTML();
         const all    = parseAll(html);
@@ -174,8 +158,32 @@ client.once('ready', () => {
       }
     }
 
+    // Test-Command: einzelne neue Werte
+    if (msg.content === '!testlive') {
+      try {
+        const html       = await fetchCalendarHTML();
+        const all        = parseAll(html);
+        const testEntries = [];
+        for (const r of all) {
+          const a = parseFloat(r.actual.replace(/[,%]/g, ''));
+          if (isNaN(a)) continue;
+          testEntries.push(
+            `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
+          );
+        }
+        if (testEntries.length > 0) {
+          await msg.reply(`🕑 **Test Live-Daten**\n${testEntries.join('\n')}`);
+        } else {
+          await msg.reply('Keine Live-Daten zum Testen gefunden.');
+        }
+      } catch (e) {
+        console.error('TestLive-Command Fehler:', e);
+        await msg.reply('Fehler beim Testen der Live-Daten.');
+      }
+    }
+
     // Clear-Command: alle Bot-Nachrichten löschen
-    if (msg.channelId === channelId && msg.content === '!clear') {
+    if (msg.content === '!clear') {
       try {
         await msg.reply('Lösche alle Bot-Nachrichten...');
         await clearBotMessages(channel);
