@@ -57,13 +57,23 @@ function parseAll(html) {
   return items;
 }
 
-// 3) formatiere Tages-Übersicht
+// Helper: convert scraped time string to Berlin Time formatted
+function toBerlinTime(timeStr) {
+  // timeStr: "HH:mm" assumed in UTC
+  const [h, m] = timeStr.split(':').map(Number);
+  const date = new Date();
+  date.setUTCHours(h, m, 0, 0);
+  return date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+}
+
+// 3) formatiere Tages-Übersicht (Zeit in Berliner Zeit)
 function formatRows(rows) {
   if (!rows.length) return 'Keine Einträge gefunden.';
-  return rows.map(r =>
-    `\`${r.time}\` • **${r.currency}** — ${r.event}\n` +
-    `> Actual: ${r.actual || '-'} | Forecast: ${r.forecast} | Previous: ${r.previous}`
-  ).join('\n\n');
+  return rows.map(r => {
+    const timeBerlin = toBerlinTime(r.time);
+    return `\`${timeBerlin}\` • **${r.currency}** — ${r.event}\n` +
+           `> Actual: ${r.actual || '-'} | Forecast: ${r.forecast} | Previous: ${r.previous}`;
+  }).join('\n\n');
 }
 
 // 4) vergleiche Actual mit Forecast und setze Pfeil+Text
@@ -84,14 +94,14 @@ client.once('ready', () => {
     process.exit(1);
   }
 
-  // 00:00 Uhr: komplette Tages-Übersicht + Cache-Reset + Old-Posts löschen
+  // 00:00 Uhr (Berlin): komplette Tages-Übersicht + Cache-Reset + Old-Posts löschen
   cron.schedule('0 0 * * *', async () => {
     try {
       await clearBotMessages(channel);
       const html = await fetchCalendarHTML();
       const all  = parseAll(html);
       for (const key in lastActual) delete lastActual[key];
-      const date = new Date().toISOString().slice(0,10);
+      const date = new Date().toLocaleDateString('de-DE', { timeZone: tz });
       const deRows = all.filter(r => r.currency === 'EUR');
       const usRows = all.filter(r => r.currency === 'USD');
       await channel.send(
@@ -111,7 +121,7 @@ client.once('ready', () => {
     }
   }, { timezone: tz });
 
-  // Polling: jede Minute von 08:00–22:00, nur neue Zahlen
+  // Polling: jede Minute von 08:00–22:00 (Berlin), nur neue Zahlen
   cron.schedule('*/1 8-22 * * *', async () => {
     try {
       const html = await fetchCalendarHTML();
@@ -122,8 +132,9 @@ client.once('ready', () => {
         if (isNaN(a)) continue;
         const key = `${r.currency}|${r.event}|${r.time}`;
         if (lastActual[key] !== a) {
+          const timeBerlin = toBerlinTime(r.time);
           newEntries.push(
-            `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
+            `\`${timeBerlin}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
           );
           lastActual[key] = a;
         }
@@ -167,8 +178,9 @@ client.once('ready', () => {
         for (const r of all) {
           const a = parseFloat(r.actual.replace(/[,%]/g, ''));
           if (isNaN(a)) continue;
+          const timeBerlin = toBerlinTime(r.time);
           testEntries.push(
-            `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
+            `\`${timeBerlin}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
           );
         }
         if (testEntries.length > 0) {
