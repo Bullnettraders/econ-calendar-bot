@@ -17,8 +17,19 @@ const client = new Client({
 const channelId = process.env.CHANNEL_ID;
 const tz = process.env.TZ || 'Europe/Berlin';
 
-// Cache für bereits gepostete Actual-Werte (speichern als Number)
+// Cache für bereits gepostete Actual-Werte (als Number)
 const lastActual = {};
+
+// Hilfsfunktion: Nachrichten eines Autors im Channel löschen
+async function clearBotMessages(channel) {
+  let fetched;
+  do {
+    fetched = await channel.messages.fetch({ limit: 100 });
+    const botMessages = fetched.filter(msg => msg.author.id === client.user.id);
+    if (botMessages.size === 0) break;
+    await channel.bulkDelete(botMessages, true).catch(err => console.error('BulkDelete Error:', err));
+  } while (fetched.size >= 2);
+}
 
 // 1) öffentliche Seite per GET holen
 async function fetchCalendarHTML() {
@@ -73,9 +84,12 @@ client.once('ready', () => {
     process.exit(1);
   }
 
-  // 00:00 Uhr: komplette Tages-Übersicht + Cache-Reset
+  // 00:00 Uhr: komplette Tages-Übersicht + Cache-Reset + Old-Posts löschen
   cron.schedule('0 0 * * *', async () => {
     try {
+      // Alte Bot-Beiträge löschen
+      await clearBotMessages(channel);
+
       const html = await fetchCalendarHTML();
       const all  = parseAll(html);
 
@@ -83,10 +97,11 @@ client.once('ready', () => {
       for (const key in lastActual) delete lastActual[key];
 
       // Übersicht senden
+      const date = new Date().toISOString().slice(0,10);
       const deRows = all.filter(r => r.currency === 'EUR');
       const usRows = all.filter(r => r.currency === 'USD');
       await channel.send(
-        `📊 **Wirtschaftskalender ${new Date().toISOString().slice(0,10)}**\n\n` +
+        `📊 **Wirtschaftskalender ${date}**\n\n` +
         `🇩🇪 Deutschland (EUR)\n${formatRows(deRows)}\n\n` +
         `🇺🇸 USA (USD)\n${formatRows(usRows)}`
       );
@@ -114,7 +129,7 @@ client.once('ready', () => {
 
       for (const r of all) {
         const a = parseFloat(r.actual.replace(/[,%]/g, ''));
-        if (isNaN(a)) continue; // skip Holidays & non-numeric
+        if (isNaN(a)) continue;
 
         const key = `${r.currency}|${r.event}|${r.time}`;
         if (lastActual[key] !== a) {
@@ -156,6 +171,18 @@ client.once('ready', () => {
       } catch (e) {
         console.error('Test-Command Fehler:', e);
         await msg.reply('Fehler beim Testen – siehe Logs.');
+      }
+    }
+
+    // Clear-Command: alle Bot-Nachrichten löschen
+    if (msg.channelId === channelId && msg.content === '!clear') {
+      try {
+        await msg.reply('Lösche alle Bot-Nachrichten...');
+        await clearBotMessages(channel);
+        await msg.reply('Fertig: alle Bot-Nachrichten wurden gelöscht.');
+      } catch (e) {
+        console.error('Clear-Command Fehler:', e);
+        await msg.reply('Fehler beim Löschen der Nachrichten.');
       }
     }
   });
