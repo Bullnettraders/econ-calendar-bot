@@ -1,70 +1,5 @@
-// index.js
-import { Client, GatewayIntentBits } from 'discord.js';
-import cron from 'node-cron';
-import fetch from 'node-fetch';
-import { load } from 'cheerio';
-import dotenv from 'dotenv';
+// ... (oben unverändert)
 
-dotenv.config();
-
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-});
-const channelId = process.env.CHANNEL_ID;
-const tz = process.env.TZ || 'Europe/Berlin';
-
-// Cache für bereits gepostete Actual-Werte
-const lastActual = {};
-
-// 1) öffentliche Seite per GET holen
-async function fetchCalendarHTML() {
-  const res = await fetch('https://www.investing.com/economic-calendar/', {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-  });
-  if (!res.ok) throw new Error(`Fetch Error: ${res.status}`);
-  return await res.text();
-}
-
-// 2) parse alle Zeilen der Tabelle
-function parseAll(html) {
-  const $ = load(html);
-  const items = [];
-  $('#economicCalendarData tbody tr').each((_, el) => {
-    const time     = $(el).find('td').eq(0).text().trim();
-    const currency = $(el).find('td').eq(1).text().trim();
-    const event    = $(el).find('td').eq(2).text().trim();
-    const actual   = $(el).find('td').eq(3).text().trim();
-    const forecast = $(el).find('td').eq(4).text().trim();
-    const previous = $(el).find('td').eq(5).text().trim();
-    items.push({ time, currency, event, actual, forecast, previous });
-  });
-  return items;
-}
-
-// 3) formatiere Tages-Übersicht
-function formatRows(rows) {
-  if (!rows.length) return 'Keine Einträge gefunden.';
-  return rows.map(r =>
-    `\`${r.time}\` • **${r.currency}** — ${r.event}\n` +
-    `> Actual: ${r.actual || '-'} | Forecast: ${r.forecast} | Previous: ${r.previous}`
-  ).join('\n\n');
-}
-
-// 4) vergleiche Actual mit Forecast und setze Pfeil+Text
-function compareWithForecast(actualStr, forecastStr) {
-  const a = parseFloat(actualStr.replace(/[,%]/g, ''));
-  const f = parseFloat(forecastStr.replace(/[,%]/g, ''));
-  if (isNaN(a) || isNaN(f)) return '';
-  if (a > f) return '🔺 besser als erwartet';
-  if (a < f) return '🔻 schlechter als erwartet';
-  return '→ wie erwartet';
-}
-
-// 5) Polling ab 08–22 Uhr: neue Actual-Werte posten
 client.once('ready', () => {
   console.log('Bot ist online!');
   const channel = client.channels.cache.get(channelId);
@@ -76,15 +11,33 @@ client.once('ready', () => {
   // 00:00 Uhr: komplette Tages-Übersicht
   cron.schedule('0 0 * * *', async () => {
     try {
-      const html   = await fetchCalendarHTML();
-      const all    = parseAll(html);
+      const html = await fetchCalendarHTML();
+      const all  = parseAll(html);
+
+      // 1. Cache zurücksetzen, damit wir nur die tagesaktuellen Werte speichern
+      for (const key in lastActual) {
+        delete lastActual[key];
+      }
+
       const deRows = all.filter(r => r.currency === 'EUR');
       const usRows = all.filter(r => r.currency === 'USD');
+
+      // 2. Übersicht senden
       await channel.send(
         `📊 **Wirtschaftskalender ${new Date().toISOString().slice(0,10)}**\n\n` +
         `🇩🇪 Deutschland (EUR)\n${formatRows(deRows)}\n\n` +
         `🇺🇸 USA (USD)\n${formatRows(usRows)}`
       );
+
+      // 3. Cache mit den aktuellen Werten füllen,
+      //    damit der Polling-Job ab 08:00 keine "alten" Werte als neu sieht
+      all
+        .filter(r => r.actual)
+        .forEach(r => {
+          const key = `${r.currency}|${r.event}|${r.time}`;
+          lastActual[key] = r.actual;
+        });
+
     } catch (e) {
       console.error('00:00-Job Fehler:', e);
     }
@@ -121,25 +74,5 @@ client.once('ready', () => {
     }
   }, { timezone: tz });
 
-  // Test-Command: "!test"
-  client.on('messageCreate', async msg => {
-    if (msg.channelId === channelId && msg.content === '!test') {
-      try {
-        const html   = await fetchCalendarHTML();
-        const all    = parseAll(html);
-        const deRows = all.filter(r => r.currency === 'EUR');
-        const usRows = all.filter(r => r.currency === 'USD');
-        await msg.reply(
-          `📊 **Test: Wirtschaftskalender**\n\n` +
-          `🇩🇪 Deutschland\n${formatRows(deRows)}\n\n` +
-          `🇺🇸 USA\n${formatRows(usRows)}`
-        );
-      } catch (e) {
-        console.error('Test-Command Fehler:', e);
-        await msg.reply('Fehler beim Testen – siehe Logs.');
-      }
-    }
-  });
+  // ... (Rest bleibt unverändert)
 });
-
-client.login(process.env.DISCORD_TOKEN);
