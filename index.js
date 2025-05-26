@@ -17,10 +17,10 @@ const client = new Client({
 const channelId = process.env.CHANNEL_ID;
 const tz = process.env.TZ || 'Europe/Berlin';
 
-// Cache für bereits gepostete Actual-Werte
+// Cache für bereits gepostete Actual-Werte (speichern als Number)
 const lastActual = {};
 
-// Funktion: Seite holen
+// 1) öffentliche Seite per GET holen
 async function fetchCalendarHTML() {
   const res = await fetch('https://www.investing.com/economic-calendar/', {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
@@ -29,7 +29,7 @@ async function fetchCalendarHTML() {
   return await res.text();
 }
 
-// Funktion: HTML parsen
+// 2) parse alle Zeilen der Tabelle
 function parseAll(html) {
   const $ = load(html);
   const items = [];
@@ -46,7 +46,7 @@ function parseAll(html) {
   return items;
 }
 
-// Funktion: Zeilen formatieren
+// 3) formatiere Tages-Übersicht
 function formatRows(rows) {
   if (!rows.length) return 'Keine Einträge gefunden.';
   return rows.map(r =>
@@ -55,7 +55,7 @@ function formatRows(rows) {
   ).join('\n\n');
 }
 
-// Funktion: Vergleich Actual vs Forecast
+// 4) vergleiche Actual mit Forecast und setze Pfeil+Text
 function compareWithForecast(actualStr, forecastStr) {
   const a = parseFloat(actualStr.replace(/[,%]/g, ''));
   const f = parseFloat(forecastStr.replace(/[,%]/g, ''));
@@ -65,7 +65,6 @@ function compareWithForecast(actualStr, forecastStr) {
   return '→ wie erwartet';
 }
 
-// Sobald der Client ready ist …
 client.once('ready', () => {
   console.log('Bot ist online!');
   const channel = client.channels.cache.get(channelId);
@@ -74,7 +73,7 @@ client.once('ready', () => {
     process.exit(1);
   }
 
-  // 00:00 Uhr: Tagesübersicht + Cache-Reset
+  // 00:00 Uhr: komplette Tages-Übersicht + Cache-Reset
   cron.schedule('0 0 * * *', async () => {
     try {
       const html = await fetchCalendarHTML();
@@ -83,46 +82,54 @@ client.once('ready', () => {
       // Cache leeren
       for (const key in lastActual) delete lastActual[key];
 
+      // Übersicht senden
       const deRows = all.filter(r => r.currency === 'EUR');
       const usRows = all.filter(r => r.currency === 'USD');
-
       await channel.send(
         `📊 **Wirtschaftskalender ${new Date().toISOString().slice(0,10)}**\n\n` +
         `🇩🇪 Deutschland (EUR)\n${formatRows(deRows)}\n\n` +
         `🇺🇸 USA (USD)\n${formatRows(usRows)}`
       );
 
-      // Cache mit aktuellen Werten befüllen
-      all.filter(r => r.actual).forEach(r => {
-        const key = `${r.currency}|${r.event}|${r.time}`;
-        lastActual[key] = r.actual;
+      // Cache mit aktuellen Zahlen befüllen
+      all.forEach(r => {
+        const a = parseFloat(r.actual.replace(/[,%]/g, ''));
+        if (!isNaN(a)) {
+          const key = `${r.currency}|${r.event}|${r.time}`;
+          lastActual[key] = a;
+        }
       });
+
     } catch (e) {
       console.error('00:00-Job Fehler:', e);
     }
   }, { timezone: tz });
 
-  // Polling 08–22 Uhr: nur neue Daten
+  // Polling: jede Minute von 08:00–22:00, nur echte neue Zahlen
   cron.schedule('*/1 8-22 * * *', async () => {
     try {
       const html       = await fetchCalendarHTML();
       const all        = parseAll(html);
-      const candidates = all.filter(r => r.actual);
       const newEntries = [];
 
-      for (const r of candidates) {
+      for (const r of all) {
+        const a = parseFloat(r.actual.replace(/[,%]/g, ''));
+        if (isNaN(a)) continue; // skip Holidays & non-numeric
+
         const key = `${r.currency}|${r.event}|${r.time}`;
-        if (lastActual[key] !== r.actual) {
+        if (lastActual[key] !== a) {
           const comp = compareWithForecast(r.actual, r.forecast);
           newEntries.push(
             `\`${r.time}\` • **${r.currency}** — ${r.event}: ${r.actual} ${comp}`
           );
-          lastActual[key] = r.actual;
+          lastActual[key] = a;
         }
       }
 
-      if (newEntries.length) {
-        const now = new Date().toISOString().substr(11,5);
+      if (newEntries.length > 0) {
+        const now = new Date().toLocaleTimeString('de-DE', {
+          hour: '2-digit', minute: '2-digit', timeZone: tz
+        });
         await channel.send(
           `🕑 **Neue Wirtschafts-Daten (${now})**\n` +
           newEntries.join('\n')
@@ -133,7 +140,7 @@ client.once('ready', () => {
     }
   }, { timezone: tz });
 
-  // Test-Command "!test"
+  // Test-Command: "!test"
   client.on('messageCreate', async msg => {
     if (msg.channelId === channelId && msg.content === '!test') {
       try {
@@ -154,5 +161,4 @@ client.once('ready', () => {
   });
 });
 
-// Login am Ende der Datei
 client.login(process.env.DISCORD_TOKEN);
