@@ -112,20 +112,38 @@ client.once('ready', () => {
       for (const key in lastActual) delete lastActual[key];
 
       const date = new Date().toLocaleDateString('de-DE', { timeZone: tz });
-      // Feiertage Europa (EUR) und USA (USD)
-      const eurHolidays = all.filter(r => r.currency === 'EUR' && r.time === 'All Day');
-      const usdHolidays = all.filter(r => r.currency === 'USD' && r.time === 'All Day');
+      // Liste europäischer Länder (inkl. UK)
+      const europeCountries = [
+        'Austria','Belgium','Finland','France','Germany','Greece','Ireland',
+        'Italy','Netherlands','Portugal','Spain','Sweden','United Kingdom'
+      ];
+      // Feiertage Europa und USA
+      const eurHolidays = all.filter(r => r.time === 'All Day' && europeCountries.includes(r.country));
+      const usdHolidays = all.filter(r => r.time === 'All Day' && r.country === 'United States');
       // Wirtschaftstermine Deutschland und USA
       const deRows = all.filter(r => r.currency === 'EUR' && r.country === 'Germany' && r.time !== 'All Day');
       const usRows = all.filter(r => r.currency === 'USD' && r.country === 'United States' && r.time !== 'All Day');
 
       await channel.send(
-        `📅 **Feiertage ${date}**\n` +
-        `🇪🇺 Europa (EUR)\n${formatHolidays(eurHolidays)}\n\n` +
-        `🇺🇸 USA (USD)\n${formatHolidays(usdHolidays)}\n\n` +
-        `📊 **Wirtschaftskalender ${date}**\n\n` +
-        `🇩🇪 Deutschland\n${formatRows(deRows)}\n\n` +
-        `🇺🇸 USA\n${formatRows(usRows)}`
+        `📅 **Feiertage ${date}**
+` +
+        `🇪🇺 Europa
+${formatHolidays(eurHolidays)}
+
+` +
+        `🇺🇸 USA
+${formatHolidays(usdHolidays)}
+
+` +
+        `📊 **Wirtschaftskalender ${date}**
+
+` +
+        `🇩🇪 Deutschland
+${formatRows(deRows)}
+
+` +
+        `🇺🇸 USA
+${formatRows(usRows)}`
       );
 
       // Cache mit aktuellen Zahlen füllen (nur Wirtschaft)
@@ -142,7 +160,7 @@ client.once('ready', () => {
     }
   }, { timezone: tz });
 
-  // Polling: jede Minute von 08:00–22:00 (Berlin), nur neue Zahlen
+  // Polling: jede Minute von 08:00–22:00 (Berlin), nur neue Zahlen von 08:00–22:00 (Berlin), nur neue Zahlen
   cron.schedule('*/1 8-22 * * *', async () => {
     try {
       const html = await fetchCalendarHTML();
