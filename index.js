@@ -40,7 +40,7 @@ async function fetchCalendarHTML() {
   return await res.text();
 }
 
-// 2) parse alle Zeilen der Tabelle
+// 2) parse alle Zeilen der Tabelle, inkl. country aus Flag-Title
 function parseAll(html) {
   const $ = load(html);
   const items = [];
@@ -48,11 +48,12 @@ function parseAll(html) {
     const cols     = $(el).find('td');
     const time     = cols.eq(0).text().trim();
     const currency = cols.eq(1).text().trim();
+    const country  = cols.eq(1).find('span.flag').attr('title') || '';
     const event    = cols.eq(2).text().trim();
     const actual   = cols.eq(3).text().trim();
     const forecast = cols.eq(4).text().trim();
     const previous = cols.eq(5).text().trim();
-    items.push({ time, currency, event, actual, forecast, previous });
+    items.push({ time, currency, country, event, actual, forecast, previous });
   });
   return items;
 }
@@ -71,12 +72,18 @@ function formatRows(rows) {
   if (!rows.length) return 'Keine Einträge gefunden.';
   return rows.map(r => {
     const timeBerlin = toBerlinTime(r.time);
-    return `\`${timeBerlin}\` • **${r.currency}** — ${r.event}\n` +
+    return `\`${timeBerlin}\` • **${r.currency} (${r.country})** — ${r.event}\n` +
            `> Actual: ${r.actual || '-'} | Forecast: ${r.forecast} | Previous: ${r.previous}`;
   }).join('\n\n');
 }
 
-// 4) vergleiche Actual mit Forecast und setze Pfeil+Text
+// 4) formatiere Feiertage (nur Event-Name)
+function formatHolidays(rows) {
+  if (!rows.length) return 'Keine Feiertage.';
+  return rows.map(r => `• **${r.event}** (${r.currency})`).join('\n');
+}
+
+// 5) vergleiche Actual mit Forecast und setze Pfeil+Text
 function compareWithForecast(actualStr, forecastStr) {
   const a = parseFloat(actualStr.replace(/[,%]/g, ''));
   const f = parseFloat(forecastStr.replace(/[,%]/g, ''));
@@ -100,22 +107,36 @@ client.once('ready', () => {
       await clearBotMessages(channel);
       const html = await fetchCalendarHTML();
       const all  = parseAll(html);
+
+      // Cache zurücksetzen
       for (const key in lastActual) delete lastActual[key];
+
       const date = new Date().toLocaleDateString('de-DE', { timeZone: tz });
-      const deRows = all.filter(r => r.currency === 'EUR');
-      const usRows = all.filter(r => r.currency === 'USD');
+      // Feiertage Europa (EUR) und USA (USD)
+      const eurHolidays = all.filter(r => r.currency === 'EUR' && r.time === 'All Day');
+      const usdHolidays = all.filter(r => r.currency === 'USD' && r.time === 'All Day');
+      // Wirtschaftstermine Deutschland und USA
+      const deRows = all.filter(r => r.currency === 'EUR' && r.country === 'Germany' && r.time !== 'All Day');
+      const usRows = all.filter(r => r.currency === 'USD' && r.country === 'United States' && r.time !== 'All Day');
+
       await channel.send(
+        `📅 **Feiertage ${date}**\n` +
+        `🇪🇺 Europa (EUR)\n${formatHolidays(eurHolidays)}\n\n` +
+        `🇺🇸 USA (USD)\n${formatHolidays(usdHolidays)}\n\n` +
         `📊 **Wirtschaftskalender ${date}**\n\n` +
-        `🇩🇪 Deutschland (EUR)\n${formatRows(deRows)}\n\n` +
-        `🇺🇸 USA (USD)\n${formatRows(usRows)}`
+        `🇩🇪 Deutschland\n${formatRows(deRows)}\n\n` +
+        `🇺🇸 USA\n${formatRows(usRows)}`
       );
-      all.forEach(r => {
+
+      // Cache mit aktuellen Zahlen füllen (nur Wirtschaft)
+      [...deRows, ...usRows].forEach(r => {
         const a = parseFloat(r.actual.replace(/[,%]/g, ''));
         if (!isNaN(a)) {
-          const key = `${r.currency}|${r.event}|${r.time}`;
+          const key = `${r.currency}|${r.country}|${r.event}|${r.time}`;
           lastActual[key] = a;
         }
       });
+
     } catch (e) {
       console.error('00:00-Job Fehler:', e);
     }
@@ -127,18 +148,27 @@ client.once('ready', () => {
       const html = await fetchCalendarHTML();
       const all  = parseAll(html);
       const newEntries = [];
-      for (const r of all) {
+
+      // Filter nur DE und US Wirtschaft (keine Feiertage)
+      const candidates = all.filter(r => {
         const a = parseFloat(r.actual.replace(/[,%]/g, ''));
-        if (isNaN(a)) continue;
-        const key = `${r.currency}|${r.event}|${r.time}`;
+        return !isNaN(a) &&
+               ((r.currency === 'EUR' && r.country === 'Germany' && r.time !== 'All Day') ||
+                (r.currency === 'USD' && r.country === 'United States' && r.time !== 'All Day'));
+      });
+
+      for (const r of candidates) {
+        const a = parseFloat(r.actual.replace(/[,%]/g, ''));
+        const key = `${r.currency}|${r.country}|${r.event}|${r.time}`;
         if (lastActual[key] !== a) {
           const timeBerlin = toBerlinTime(r.time);
           newEntries.push(
-            `\`${timeBerlin}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
+            `\`${timeBerlin}\` • **${r.currency} (${r.country})** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
           );
           lastActual[key] = a;
         }
       }
+
       if (newEntries.length > 0) {
         const now = new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: tz });
         await channel.send(`🕑 **Neue Wirtschafts-Daten (${now})**\n${newEntries.join('\n')}`);
@@ -151,17 +181,21 @@ client.once('ready', () => {
   client.on('messageCreate', async msg => {
     if (msg.channelId !== channelId) return;
 
-    // Test-Command: Tagesübersicht
+    // Test-Command: Übersicht inkl. Feiertage
     if (msg.content === '!test') {
       try {
         const html   = await fetchCalendarHTML();
         const all    = parseAll(html);
-        const deRows = all.filter(r => r.currency === 'EUR');
-        const usRows = all.filter(r => r.currency === 'USD');
+        const eurH   = all.filter(r => r.currency === 'EUR' && r.time === 'All Day');
+        const usdH   = all.filter(r => r.currency === 'USD' && r.time === 'All Day');
+        const deR    = all.filter(r => r.currency === 'EUR' && r.country === 'Germany' && r.time !== 'All Day');
+        const usR    = all.filter(r => r.currency === 'USD' && r.country === 'United States' && r.time !== 'All Day');
         await msg.reply(
-          `📊 **Test: Wirtschaftskalender**\n\n` +
-          `🇩🇪 Deutschland\n${formatRows(deRows)}\n\n` +
-          `🇺🇸 USA\n${formatRows(usRows)}`
+          `📅 **Test: Feiertage & Wirtschaft ${new Date().toLocaleDateString('de-DE',{timeZone:tz})}**\n` +
+          `🇪🇺 Europa Feiertage\n${formatHolidays(eurH)}\n\n` +
+          `🇺🇸 USA Feiertage\n${formatHolidays(usdH)}\n\n` +
+          `📊 Wirtschaft Deutschland\n${formatRows(deR)}\n\n` +
+          `📊 Wirtschaft USA\n${formatRows(usR)}`
         );
       } catch (e) {
         console.error('Test-Command Fehler:', e);
@@ -169,25 +203,26 @@ client.once('ready', () => {
       }
     }
 
-    // Test-Command: einzelne neue Werte
+    // Test-Command: einzelne neue Wirtschaftswerte
     if (msg.content === '!testlive') {
       try {
-        const html       = await fetchCalendarHTML();
-        const all        = parseAll(html);
-        const testEntries = [];
-        for (const r of all) {
+        const html = await fetchCalendarHTML();
+        const all  = parseAll(html);
+        const entries = [];
+        const cand = all.filter(r => {
           const a = parseFloat(r.actual.replace(/[,%]/g, ''));
-          if (isNaN(a)) continue;
+          return !isNaN(a) &&
+                 ((r.currency==='EUR'&&r.country==='Germany'&&r.time!=='All Day')||
+                  (r.currency==='USD'&&r.country==='United States'&&r.time!=='All Day'));
+        });
+        cand.forEach(r => {
           const timeBerlin = toBerlinTime(r.time);
-          testEntries.push(
-            `\`${timeBerlin}\` • **${r.currency}** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual, r.forecast)}`
+          entries.push(
+            `\`${timeBerlin}\` • **${r.currency} (${r.country})** — ${r.event}: ${r.actual} ${compareWithForecast(r.actual,r.forecast)}`
           );
-        }
-        if (testEntries.length > 0) {
-          await msg.reply(`🕑 **Test Live-Daten**\n${testEntries.join('\n')}`);
-        } else {
-          await msg.reply('Keine Live-Daten zum Testen gefunden.');
-        }
+        });
+        if(entries.length) await msg.reply(`🕑 **Test Live-Daten**\n${entries.join('\n')}`);
+        else           await msg.reply('Keine Live-Daten zum Testen gefunden.');
       } catch (e) {
         console.error('TestLive-Command Fehler:', e);
         await msg.reply('Fehler beim Testen der Live-Daten.');
