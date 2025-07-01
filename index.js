@@ -16,6 +16,7 @@ const client = new Client({
 
 const channelId = process.env.CHANNEL_ID;
 const tz = process.env.TZ || 'Europe/Berlin';
+const investingUrl = process.env.INVESTING_URL || 'https://www.investing.com/economic-calendar/'; // URL hinzugefügt
 
 // Cache für bereits gepostete Actual-Werte (als Number)
 const lastActual = {};
@@ -33,7 +34,7 @@ async function clearBotMessages(channel) {
 
 // 1) öffentliche Seite per GET holen
 async function fetchCalendarHTML() {
-  const res = await fetch('https://www.investing.com/economic-calendar/', {
+  const res = await fetch(investingUrl, { // investingUrl hier verwendet
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
   });
   if (!res.ok) throw new Error(`Fetch Error: ${res.status}`);
@@ -97,7 +98,7 @@ client.once('ready', () => {
   console.log('Bot ist online!');
   const channel = client.channels.cache.get(channelId);
   if (!channel?.isTextBased()) {
-    console.error('Channel nicht gefunden!');
+    console.error('Channel nicht gefunden oder ist kein Textkanal!');
     process.exit(1);
   }
 
@@ -160,7 +161,7 @@ ${formatRows(usRows)}`
     }
   }, { timezone: tz });
 
-  // Polling: jede Minute von 08:00–22:00 (Berlin), nur neue Zahlen von 08:00–22:00 (Berlin), nur neue Zahlen
+  // Polling: jede Minute von 08:00–22:00 (Berlin), nur neue Zahlen
   cron.schedule('*/1 8-22 * * *', async () => {
     try {
       const html = await fetchCalendarHTML();
@@ -240,7 +241,7 @@ ${formatRows(usRows)}`
           );
         });
         if(entries.length) await msg.reply(`🕑 **Test Live-Daten**\n${entries.join('\n')}`);
-        else           await msg.reply('Keine Live-Daten zum Testen gefunden.');
+        else         await msg.reply('Keine Live-Daten zum Testen gefunden.');
       } catch (e) {
         console.error('TestLive-Command Fehler:', e);
         await msg.reply('Fehler beim Testen der Live-Daten.');
